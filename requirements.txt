@@ -1,1 +1,3 @@
 # Runtime dependencies will be added incrementally in later phases.
+fastapi
+uvicorn[standard]
