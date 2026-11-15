@@ -17,6 +17,10 @@ EVIDENCE_MODEL = "deepseek-flash"
 Selection = TypeVar("Selection", bound=BaseModel)
 
 
+class ModelServiceUnavailable(SystemExit):
+    """The external provider could not be reached or rejected the request."""
+
+
 class EvidenceChoice(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -63,9 +67,9 @@ def _request_selection(
         )
         response.raise_for_status()
     except httpx2.HTTPStatusError as exc:
-        raise SystemExit(f"DeepSeek 返回 HTTP {exc.response.status_code}") from None
+        raise ModelServiceUnavailable(f"DeepSeek 返回 HTTP {exc.response.status_code}") from None
     except httpx2.RequestError as exc:
-        raise SystemExit(f"连接 DeepSeek 失败：{type(exc).__name__}") from None
+        raise ModelServiceUnavailable(f"连接 DeepSeek 失败：{type(exc).__name__}") from None
 
     try:
         choice = response.json()["choices"][0]

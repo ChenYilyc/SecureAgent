@@ -10,13 +10,49 @@
 <label>账号<input id="account" name="username" autocomplete="username" required></label>
 <label>口令<input id="password" name="password" type="password" autocomplete="current-password" required></label>
 <button>登录</button></form></section>
+<div id="admin-panel" hidden>
+<div class="top"><h1>人员与工程管理</h1><button id="admin-refresh" type="button" class="link">刷新列表</button></div>
+<div class="grid">
+<section>
+<h2>创建用户</h2>
+<form id="admin-user-form" class="stack" method="post">
+<label>用户名<input id="admin-user-login" required maxlength="48" autocomplete="off" spellcheck="false"></label>
+<label>初始密码<input id="admin-user-password" type="password" required minlength="12" maxlength="256" autocomplete="new-password"></label>
+<p class="hint">密码长度为 12–256 个字符。</p>
+<fieldset class="wb-grant-fieldset">
+<legend>所属工程（可多选）与岗位</legend>
+<div id="admin-create-grants" class="wb-grant-list"></div>
+</fieldset>
+<p id="admin-project-hint" class="hint" hidden>请先新建一个工程，再为用户分配岗位。</p>
+<button id="admin-user-submit" type="submit" disabled>创建用户</button>
+</form>
+</section>
+<section>
+<h2>用户列表</h2>
+<ul id="admin-users"></ul>
+</section>
+</div>
+<section aria-labelledby="admin-project-heading">
+<h2 id="admin-project-heading">工程管理</h2>
+<details id="admin-project-details">
+<summary>新建工程</summary>
+<form id="admin-project-form" class="stack" method="post">
+<label>工程编号<input id="admin-project-id" required maxlength="64" autocomplete="off" spellcheck="false" placeholder="例如 DEMO06"></label>
+<label>工程名称<input id="admin-project-name" required maxlength="120" autocomplete="off"></label>
+<button type="submit">创建工程</button>
+</form>
+</details>
+<ul id="admin-projects"></ul>
+</section>
+</div>
 <div id="workspace" hidden>
 <div class="top"><div><p class="eyebrow">项目文控</p><h1>文档工作台</h1></div>
 <label>当前项目 <select id="project" aria-label="当前项目"></select></label></div>
+<p id="archived-note" class="hint" hidden>工程已归档，可按岗位查阅资料和引用。</p>
 <div class="grid" id="panels"><div id="document-panel">
 <section id="receiving" hidden><h2>提交草稿</h2>
 <form id="upload" class="stack"><label>原件<input id="file" type="file" accept=".docx,.pdf,.md" required></label>
-<p class="hint">Word、文本 PDF 或 Markdown，每份限 8 MiB。</p>
+<p id="upload-hint" class="hint">支持 Word、文本 PDF 或 Markdown。</p>
 <div class="fields"><label>文号<input id="document" placeholder="QL-WB-101" required maxlength="71"></label>
 <label>修订版<input id="revision" placeholder="R01" required maxlength="9"></label></div>
 <button>上传并预览</button></form></section>

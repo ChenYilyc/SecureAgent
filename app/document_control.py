@@ -68,6 +68,20 @@ def archive(raw, digest, extension=".md"):
             stage.replace(destination)
 
 
+def parse_version(raw, extension, source, document_id, title=None):
+    if extension == ".md":
+        text = raw.decode("utf-8-sig")
+        if title is None:
+            title = next((line[2:].strip() for line in text.splitlines() if line.startswith("# ")), "")
+        if not title:
+            raise ValueError("需要以 # 开头的文件标题")
+        sections = extract_sections(text, source)
+    else:
+        from app.office_sources import parse_office
+        title, sections = parse_office(raw, extension, source, document_id)
+    return title, sections
+
+
 def record_version(db, key, raw, status, actor, title=None, *, extension=".md"):
     if extension not in {".md", ".docx", ".pdf"}:
         raise ValueError("只接收 Markdown、DOCX 或文本 PDF")
@@ -82,16 +96,7 @@ def record_version(db, key, raw, status, actor, title=None, *, extension=".md"):
 
     # Validate before archiving so citations refer to this exact snapshot.
     source = (ARCHIVE / f"{digest}{extension}").relative_to(ROOT).as_posix()
-    if extension == ".md":
-        text = raw.decode("utf-8-sig")
-        if title is None:
-            title = next((line[2:].strip() for line in text.splitlines() if line.startswith("# ")), "")
-        if not title:
-            raise ValueError("需要以 # 开头的文件标题")
-        sections = extract_sections(text, source)
-    else:
-        from app.office_sources import parse_office
-        title, sections = parse_office(raw, extension, source, key[1])
+    title, sections = parse_version(raw, extension, source, key[1], title)
     archive(raw, digest, extension)
     db.execute("INSERT INTO versions VALUES (?,?,?,?,?,?,?)",
                (*key, title, status, digest, json.dumps(sections, ensure_ascii=False)))

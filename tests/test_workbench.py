@@ -43,6 +43,7 @@ class WorkbenchTests(unittest.TestCase):
                                         ARCHIVE=self.root/"archive", OUTPUT=self.index))
         self.enterContext(patch.object(finder, "CHUNKS_PATH", self.index))
         self.enterContext(patch.dict("os.environ", {
+            "SECUREAGENT_DATABASE_URL": "",
             "SECUREAGENT_RETRIEVAL": "lexical", "SECUREAGENT_ALLOW_REMOTE_QA": "0",
             "SECUREAGENT_QA_PROJECTS": "", "DEEPSEEK_API_KEY": "",
         }))
@@ -126,6 +127,24 @@ class WorkbenchTests(unittest.TestCase):
         for route in ("QL01/versions","QL01/QL-WB-101/R02/preview","QL01/QL-WB-101/R02/original"):
             self.assertEqual(self.client.get(self.base+route).status_code,404)
         self.assertEqual(self.client.post(self.base+"QL01/search",json={"question":"归档"}).status_code,404)
+
+    def test_company_admin_needs_a_project_role_for_document_access(self):
+        identity = {
+            "login": "test-admin", "is_company_admin": True, "role": None, "csrf": "test-csrf",
+            "projects": [], "project_roles": {}, "project_names": {},
+        }
+        with patch.object(web.auth, "session", return_value=identity):
+            profile = self.client.get(self.base + "me")
+            self.assertEqual(profile.status_code, 200)
+            self.assertEqual(profile.json()["role_label"], "公司管理员")
+            self.assertEqual(profile.json()["projects"], [])
+            self.assertEqual(self.client.get(self.base + "QL01/versions").status_code, 404)
+
+            identity.update(projects=["QL01", "HT02"], project_roles={"QL01": "employee", "HT02": "reviewer"})
+            self.client.headers["x-wb-csrf"] = identity["csrf"]
+            res = self.client.post(self.endpoint("R01", "approve"),
+                                   json={"sha256": "0" * 64, "expected_current": None})
+            self.assertEqual(res.status_code, 403)
 
     def test_anonymous_csrf_logout_and_scan(self):
         self.assertEqual(self.client.get(self.base+"QL01/versions").status_code,401)

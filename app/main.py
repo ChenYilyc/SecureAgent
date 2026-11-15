@@ -3,6 +3,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 import logging
 
 from app.read_call import execute_read_call
@@ -79,6 +80,11 @@ async def add_request_id(
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
     return response
+
+
+@app.get("/", include_in_schema=False)
+def landing():
+    return RedirectResponse("/workbench")
 
 
 @app.get("/health")

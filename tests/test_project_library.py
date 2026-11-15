@@ -22,7 +22,8 @@ class ProjectLibraryTests(unittest.TestCase):
         self.enterContext(patch.multiple(control, ROOT=self.root, REGISTER=self.root / "registry.db",
                                         ARCHIVE=self.root / "archive", OUTPUT=self.index))
         self.enterContext(patch.object(finder, "CHUNKS_PATH", self.index))
-        self.enterContext(patch.dict("os.environ", {"SECUREAGENT_ALLOW_REMOTE_QA": "0",
+        self.enterContext(patch.dict("os.environ", {"SECUREAGENT_DATABASE_URL": "",
+                                                   "SECUREAGENT_ALLOW_REMOTE_QA": "0",
                                                    "SECUREAGENT_RETRIEVAL": "lexical"}))
         self.db = self.enterContext(closing(accounts.connect()))
 

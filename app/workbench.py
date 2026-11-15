@@ -3,21 +3,26 @@ from contextlib import closing
 import hashlib
 import hmac
 import json
+import logging
 import os
 from pathlib import Path
 import re
+from typing import Annotated, TypeVar
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from app import document_control as control
+from app import postgres_documents as pg
 from app import workbench_accounts as accounts
-from app.answer_construction import choose_by_part, choose_clause
+from app import workbench_admin as admin
+from app import workbench_auth as auth
+from app.answer_construction import ModelServiceUnavailable, choose_by_part, choose_clause
 from app.office_sources import MAX_BYTES, source_location
-from app.search_construction import search_current
+from app.search_construction import rank_current, search_current
 from app.semantic_retrieval import RetrievalUnavailable
 
 router = APIRouter(prefix="/workbench", include_in_schema=False)
@@ -51,19 +56,39 @@ class Question(EmployeeQuestion):
     multi: bool = False
 
 
-def principal(req, project=None, roles=None):
-    with closing(accounts.connect()) as db:
-        identity = accounts.session(db, req.cookies.get(COOKIE))
+def upload_limit() -> int:
+    return 4 * 1024 * 1024 if os.getenv("VERCEL") == "1" else MAX_BYTES
+
+
+def streamed(blob: bytes, media_type: str, headers: dict) -> StreamingResponse:
+    chunks = (blob[offset:offset + 65536] for offset in range(0, len(blob), 65536))
+    return StreamingResponse(chunks, media_type=media_type, headers=headers)
+
+
+def document_json(value) -> Response:
+    response = JSONResponse(value, headers=HEADERS)
+    if os.getenv("VERCEL") == "1" and len(response.body) > upload_limit():
+        return streamed(response.body, "application/json", HEADERS)
+    return response
+
+
+def principal(req, project=None, roles=None, *, document_write=False):
+    identity = auth.session(req.cookies.get(COOKIE))
     if not identity:
         raise HTTPException(401, "请先登录。")
-    if project is not None and project not in identity["projects"]:
-        raise HTTPException(404, "项目或资料不存在。")
+    if project is not None:
+        project_role = identity["project_roles"].get(project)
+        if project_role is None:
+            raise HTTPException(404, "项目或资料不存在。")
+        identity = {**identity, "role": project_role}
     if roles and identity["role"] not in roles:
         raise HTTPException(403, "此操作需要相应的岗位权限。")
     if req.method != "GET":
         supplied = req.headers.get("x-wb-csrf", "").encode("utf-8")
         if not hmac.compare_digest(identity["csrf"].encode("ascii"), supplied):
             raise HTTPException(403, "页面会话已失效，请刷新。")
+    if document_write and identity["project_states"][project] == "archived":
+        raise HTTPException(409, "工程已归档，文档只读。")
     return identity
 
 
@@ -103,13 +128,12 @@ def stylesheet():
 def login(form: Login, request: Request):
     if request.headers.get("x-wb-login") != "1":
         raise HTTPException(403, "请从工作台登录。")
-    with closing(accounts.connect()) as db:
-        token = accounts.sign_in(db, form.login, form.password)
+    token = auth.sign_in(form.login, form.password)
     if not token:
         raise HTTPException(401, "账号或口令错误。")
     response = JSONResponse({"ok": True}, headers=HEADERS)
     response.set_cookie(COOKIE, token, httponly=True, samesite="strict", path="/workbench",
-                        secure=request.url.scheme == "https", max_age=accounts.HOURS*3600)
+                        secure=os.getenv("VERCEL") == "1" or request.url.scheme == "https", max_age=accounts.HOURS*3600)
     return response
 
 
@@ -118,31 +142,91 @@ def me(request: Request):
     user = principal(request)
     allowed = remote_qa_projects()
     qa_projects = [project for project in user["projects"] if project in allowed]
-    projects = user["projects"]
-    placeholders = ",".join("?" for _ in projects)
-    with closing(accounts.connect()) as db:
-        names = dict(db.execute(
-            f"SELECT project_id, display_name FROM project_names WHERE project_id IN ({placeholders})",
-            projects,
-        ))
-    return JSONResponse({**user, "role_label": accounts.ROLES[user["role"]],
-                         "remote_enabled": bool(qa_projects), "qa_projects": qa_projects,
-                         "project_names": names}, headers=HEADERS)
+    role_label = "公司管理员" if user["is_company_admin"] else accounts.ROLES.get(user["role"], "项目成员")
+    return JSONResponse({**user, "role_label": role_label, "remote_enabled": bool(qa_projects),
+                         "qa_projects": qa_projects, "upload_limit": upload_limit()}, headers=HEADERS)
 
 
 @router.post("/api/logout")
 def logout(request: Request):
     principal(request)
-    with closing(accounts.connect()) as db, db:
-        db.execute("DELETE FROM wb_sessions WHERE token_hash=?", (accounts.fingerprint(request.cookies[COOKIE]),))
+    auth.sign_out(request.cookies[COOKIE])
     response = JSONResponse({"ok": True}, headers=HEADERS)
     response.delete_cookie(COOKIE, path="/workbench")
     return response
 
 
+def company_admin(request: Request) -> str:
+    user = principal(request)
+    if not user["is_company_admin"]:
+        raise HTTPException(403, "此操作需要公司管理员权限。")
+    return user["login"]
+
+
+AdminLogin = Annotated[str, Depends(company_admin)]
+AdminForm = TypeVar("AdminForm", bound=BaseModel)
+
+
+async def admin_form(request: Request, model: type[AdminForm], hint: str) -> AdminForm:
+    try:
+        return model.model_validate_json(await request.body())
+    except ValidationError:
+        # Validation errors may contain the submitted password as part of their input.
+        raise HTTPException(422, hint) from None
+
+
+@router.get("/api/admin/users")
+def admin_users(actor: AdminLogin):
+    return JSONResponse(admin.directory(actor), headers=HEADERS)
+
+
+@router.post("/api/admin/projects")
+async def admin_create_project(request: Request, actor: AdminLogin):
+    form = await admin_form(request, admin.NewProject, "请核对工程编号和名称。")
+    result = await run_in_threadpool(admin.create_project, actor, form, request.state.request_id)
+    return JSONResponse(result, status_code=201, headers=HEADERS)
+
+
+@router.post("/api/admin/projects/{project_id}/archive")
+def admin_archive_project(project_id: admin.ProjectId, request: Request, actor: AdminLogin,
+                          expected_revision: Annotated[int, Query(ge=1)]):
+    result = admin.change_project_state(actor, project_id, "archived", expected_revision, request.state.request_id)
+    return JSONResponse(result, headers=HEADERS)
+
+
+@router.delete("/api/admin/projects/{project_id}")
+def admin_delete_project(project_id: admin.ProjectId, request: Request, actor: AdminLogin,
+                         expected_revision: Annotated[int, Query(ge=1)]):
+    result = admin.change_project_state(actor, project_id, "deleted", expected_revision, request.state.request_id)
+    return JSONResponse(result, headers=HEADERS)
+
+
+@router.post("/api/admin/users")
+async def admin_create_user(request: Request, actor: AdminLogin):
+    form = await admin_form(request, admin.NewUser, "请核对用户名、密码长度，以及每个已选工程的岗位。")
+    result = await run_in_threadpool(admin.create_user, actor, form, request.state.request_id)
+    return JSONResponse(result, status_code=201, headers=HEADERS)
+
+
+@router.put("/api/admin/users/memberships")
+async def admin_update_memberships(request: Request, actor: AdminLogin):
+    form = await admin_form(request, admin.MembershipUpdate, "请核对用户名、工程和项目岗位。")
+    result = await run_in_threadpool(admin.update_memberships, actor, form, request.state.request_id)
+    return JSONResponse(result, headers=HEADERS)
+
+
+@router.delete("/api/admin/users")
+def admin_delete_user(request: Request, actor: AdminLogin, login: admin.LoginName,
+                      expected_revision: Annotated[int, Query(ge=1)]):
+    result = admin.delete_user(actor, login, expected_revision, request.state.request_id)
+    return JSONResponse(result, headers=HEADERS)
+
+
 @router.get("/api/{project}/versions")
 def versions(project: str, request: Request):
     user = principal(request, project)
+    if auth.postgres_documents():
+        return document_json(pg.list_versions(project, user["login"]))
     with closing(accounts.connect()) as db:
         rows = db.execute("""SELECT document_id,revision,status,title FROM versions WHERE project_id=?
                           AND (? != 'employee' OR status='effective')
@@ -153,23 +237,27 @@ def versions(project: str, request: Request):
 
 def register_upload(key, data, ext, actor):
     try:
-        with closing(accounts.connect()) as db, control.transaction(db):
-            return control.record_version(db, key, data, "draft", actor, extension=ext)
+        with auth.document_write(key[0], actor, "clerk") as postgres:
+            if auth.postgres_documents():
+                return pg.receive(postgres, key, data, ext, actor)
+            with closing(accounts.connect()) as db, control.transaction(db):
+                return control.record_version(db, key, data, "draft", actor, extension=ext)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
 
 
 @router.post("/api/{project}/upload")
 async def upload(project: str, document: str, revision: str, format: str, request: Request):
-    user = principal(request, project, {"clerk"})
+    user = principal(request, project, {"clerk"}, document_write=True)
     extension = "." + format.lower()
     if (extension not in MEDIA or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,70}", document)
             or not re.fullmatch(r"R[0-9]{1,8}", revision)):
         raise HTTPException(422, "请检查文号、修订号（如 R01）及文件类型。")
     raw = bytearray()
+    limit = upload_limit()
     async for part in request.stream():
-        if len(raw) + len(part) > MAX_BYTES:
-            raise HTTPException(413, "单份文件限 8 MiB。")
+        if len(raw) + len(part) > limit:
+            raise HTTPException(413, f"单份文件限 {limit // (1024 * 1024)} MiB。")
         raw.extend(part)
     if not raw:
         raise HTTPException(422, "请选择有内容的文件。")
@@ -181,6 +269,10 @@ async def upload(project: str, document: str, revision: str, format: str, reques
 @router.get("/api/{project}/{document}/{rev}/preview")
 def preview(project: str, document: str, rev: str, request: Request):
     user = principal(request, project)
+    if auth.postgres_documents():
+        row = pg.preview((project, document, rev), user["login"])
+        row["sections"] = [{**part, "location": source_location(part)} for part in row.pop("chunks")]
+        return document_json(row)
     with closing(accounts.connect()) as db:
         row = version(db, user, (project, document, rev))
         current = db.execute("SELECT revision FROM versions WHERE project_id=? AND document_id=? "
@@ -198,9 +290,13 @@ def preview(project: str, document: str, rev: str, request: Request):
 
 @router.post("/api/{project}/{document}/{rev}/approve")
 def approval(project: str, document: str, rev: str, body: Approval, request: Request):
-    user = principal(request, project, {"reviewer"})
+    user = principal(request, project, {"reviewer"}, document_write=True)
     key = (project, document, rev)
-    with closing(accounts.connect()) as db:
+    if auth.postgres_documents():
+        with auth.document_write(project, user["login"], "reviewer") as db:
+            count = pg.approve(db, key, user["login"], body.sha256, body.expected_current)
+        return {"status": "effective", "indexed_chunks": count}
+    with auth.document_write(project, user["login"], "reviewer"), closing(accounts.connect()) as db:
         row = version(db, user, key)
         if row["sha256"] != body.sha256:
             raise HTTPException(409, "与预览的原件不同，请刷新。")
@@ -218,21 +314,27 @@ def approval(project: str, document: str, rev: str, body: Approval, request: Req
 @router.get("/api/{project}/{document}/{rev}/original")
 def original(project: str, document: str, rev: str, request: Request):
     user = principal(request, project)
-    with closing(accounts.connect()) as db:
-        row = version(db, user, (project, document, rev))
-    suffix = Path(json.loads(row["chunks"])[0]["source"]).suffix
-    if suffix not in MEDIA or not re.fullmatch("[a-f0-9]{64}", row["sha256"]):
-        raise HTTPException(404, "无可用原件。")
-    path = control.ARCHIVE / (row["sha256"] + suffix)
-    if not path.is_file():
-        raise HTTPException(404, "归档原件缺失。")
-    blob = path.read_bytes()
+    if auth.postgres_documents():
+        row = pg.original((project, document, rev), user["login"])
+        suffix, blob = row["extension"], bytes(row["original_bytes"])
+    else:
+        with closing(accounts.connect()) as db:
+            row = version(db, user, (project, document, rev))
+        suffix = Path(json.loads(row["chunks"])[0]["source"]).suffix
+        if suffix not in MEDIA or not re.fullmatch("[a-f0-9]{64}", row["sha256"]):
+            raise HTTPException(404, "无可用原件。")
+        path = control.ARCHIVE / (row["sha256"] + suffix)
+        if not path.is_file():
+            raise HTTPException(404, "归档原件缺失。")
+        blob = path.read_bytes()
     if hashlib.sha256(blob).hexdigest() != row["sha256"]:
         raise HTTPException(409, "归档原件未通过完整性检查。")
     disposition = "attachment" if suffix == ".docx" else "inline"
     name = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{document}_{rev}{suffix}")
-    return Response(blob, media_type=MEDIA[suffix],
-                    headers={**HEADERS, "Content-Disposition": f'{disposition}; filename="{name}"'})
+    headers = {**HEADERS, "Content-Disposition": f'{disposition}; filename="{name}"'}
+    if os.getenv("VERCEL") == "1" and len(blob) > upload_limit():
+        return streamed(blob, MEDIA[suffix], headers)
+    return Response(blob, media_type=MEDIA[suffix], headers=headers)
 
 
 def remote_qa_projects() -> set[str]:
@@ -250,32 +352,55 @@ def current_only(db, project, hits):
 
 @router.post("/api/{project}/ask")
 def ask(project: str, query: EmployeeQuestion, request: Request):
-    principal(request, project)
+    user = principal(request, project)
     use_model = project in remote_qa_projects()
-    result = run_query(project, query.question, use_model=use_model, multi=use_model)
-    return JSONResponse({"mode": "answer" if use_model else "search", **result}, headers=HEADERS)
+    result = run_query(project, query.question, use_model=use_model, multi=use_model,
+                       login=user["login"], allow_search_fallback=True)
+    principal(request, project)  # Access can change while the model is answering.
+    return document_json({"mode": "answer" if "answers" in result else "search", **result})
 
 
 @router.post("/api/{project}/search")
 def search(project: str, query: Question, request: Request):
-    principal(request, project)
+    user = principal(request, project)
     if query.multi and not query.use_model:
         raise HTTPException(422, "逐项核对需要启用模型。")
     if query.use_model and project not in remote_qa_projects():
         raise HTTPException(409, "此项目尚未启用外部问答。")
-    result = run_query(project, query.question, use_model=query.use_model, multi=query.multi)
-    return JSONResponse(result, headers=HEADERS)
+    result = run_query(project, query.question, use_model=query.use_model, multi=query.multi, login=user["login"])
+    principal(request, project)
+    return document_json(result)
 
 
-def run_query(project: str, question: str, *, use_model: bool, multi: bool) -> dict:
+def refreshed_hits(project, login, hits):
+    if auth.postgres_documents():
+        return pg.current_hits(project, login, hits)
+    with closing(accounts.connect()) as db:
+        return current_only(db, project, hits)
+
+
+def run_query(project: str, question: str, *, use_model: bool, multi: bool,
+              login: str | None = None, allow_search_fallback: bool = False) -> dict:
+    notices = []
     try:
-        hits = search_current(project, question)
+        if auth.postgres_documents():
+            rows = pg.current_chunks(project, login)
+            mode = os.getenv("SECUREAGENT_RETRIEVAL") or "hybrid"
+            try:
+                hits = rank_current(project, question, rows, mode=mode)
+            except RetrievalUnavailable as exc:
+                if mode != "hybrid":
+                    raise
+                logging.getLogger(__name__).warning("semantic retrieval unavailable: %s", exc)
+                hits = rank_current(project, question, rows, mode="lexical")
+                notices.append("语义检索暂不可用，当前按关键词匹配。")
+        else:
+            hits = search_current(project, question)
     except RetrievalUnavailable as exc:
         raise HTTPException(503, str(exc)) from None
     except FileNotFoundError:
         hits = []
-    with closing(accounts.connect()) as db:
-        hits = current_only(db, project, hits)
+    hits = refreshed_hits(project, login, hits)
     selected = None
     parts: list[tuple[str, list[str]]] = []
     if use_model:
@@ -288,12 +413,17 @@ def run_query(project: str, question: str, *, use_model: bool, multi: bool) -> d
                     raise HTTPException(422, "请输入含有文字或数字的问题。")
             elif evidence:
                 selected = choose_clause(question, evidence, api_key=api_key)
+        except ModelServiceUnavailable:
+            if not allow_search_fallback:
+                raise HTTPException(502, "模型服务暂不可用。") from None
+            multi = False
+            notices.append("DeepSeek 暂不可用，以下为检索到的候选条款。")
         except SystemExit:
             raise HTTPException(502, "模型未能完成条款核对，请稍后重试。") from None
         if selected is not None and selected not in evidence:
             raise HTTPException(502, "模型引用未通过候选条款校验。")
-    with closing(accounts.connect()) as db:
-        hits = current_only(db, project, hits)
+    hits = refreshed_hits(project, login, hits)
+    extra = {"notices": notices} if notices else {}
     if multi:
         current = {r["chunk_id"]: reference(r) for r in hits}
         answers = []
@@ -301,7 +431,7 @@ def run_query(project: str, question: str, *, use_model: bool, multi: bool) -> d
             # A new revision may have replaced one of the jointly required citations.
             citations = [current[cid] for cid in ids] if all(cid in current for cid in ids) else []
             answers.append({"question": part, "citations": citations})
-        return {"answers": answers}
+        return {"answers": answers, **extra}
     if selected not in {r["chunk_id"] for r in hits}:
         selected = None
-    return {"results": [reference(r) for r in hits], "selected": selected}
+    return {"results": [reference(r) for r in hits], "selected": selected, **extra}

@@ -8,7 +8,8 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, gettempdir
+from threading import Lock
 from urllib.request import Request, urlopen
 
 from app.ingest_construction import ROOT
@@ -21,8 +22,11 @@ FILES = (
     ("tokenizer.json", "tokenizer.json", "48cea5d44424912a6fd1ea647bf4fe50b55ab8b1e5879c3275f80e339e8fae26"),
     ("model.onnx", "onnx/model_quantized.onnx", "15b717c382bcb518ba457b93ea6850ede7f4f1cd8937454aa06972366cd19bcc"),
 )
-MODEL_DIR = ROOT / "data" / "models" / "bge-small-zh-v1.5-int8"
-CACHE_PATH = ROOT / "data" / "construction_vectors.sqlite3"
+HOSTED = os.getenv("VERCEL") == "1"
+CACHE_ROOT = Path(gettempdir()) / "secureagent" if HOSTED else ROOT / "data"
+MODEL_DIR = CACHE_ROOT / "models" / "bge-small-zh-v1.5-int8"
+CACHE_PATH = CACHE_ROOT / "construction_vectors.sqlite3"
+MODEL_LOCK = Lock()
 QUERY_PREFIX = "为这个句子生成表示以用于检索相关文章："
 CACHE_FORMAT = (REVISION + ":cls-l2-512-v1\0").encode()
 
@@ -96,8 +100,18 @@ class Encoder:
 
 
 @lru_cache(maxsize=1)
-def get_encoder() -> Encoder:
+def _load_encoder() -> Encoder:
+    if HOSTED:
+        try:
+            prepare(MODEL_DIR)
+        except (OSError, DownloadError) as exc:
+            raise RetrievalUnavailable("暂时无法加载中文语义检索模型。") from exc
     return Encoder(MODEL_DIR)
+
+
+def get_encoder() -> Encoder:
+    with MODEL_LOCK:
+        return _load_encoder()
 
 
 def cached_passages(db, encoder, project: str, passages: list[str]):

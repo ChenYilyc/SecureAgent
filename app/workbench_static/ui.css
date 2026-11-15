@@ -28,3 +28,16 @@ button:disabled{opacity:.55;cursor:wait}button:hover,.action:hover{filter:bright
 .answer-part h3{font-size:16px;overflow-wrap:anywhere;margin-bottom:6px}
 .answer-part + .answer-part{border-top:1px solid var(--line);margin-top:14px;padding-top:14px}
 @media(max-width:760px){.grid{display:block}main{padding:20px 14px}.header-inner{padding:10px 14px}.brand-note{display:none}.top{align-items:flex-end}section{padding:16px}.login{padding:24px}}
+#admin-panel label select {display:block;width:100%;margin-top:4px}
+#admin-panel summary {cursor:pointer;color:var(--brand);font-weight:600}
+#admin-users, #admin-projects {list-style:none;margin:12px 0 0;padding:0}
+.wb-grant-fieldset {min-width:0;margin:0;padding:8px 12px;border:1px solid var(--line);border-radius:4px}
+.wb-grant-fieldset legend {font-weight:600;padding:0 4px}
+.wb-grant-list {max-height:20rem;overflow-y:auto}
+.wb-grant-row {display:grid;grid-template-columns:minmax(0,1fr) minmax(5.5rem,8rem);align-items:center;gap:8px;padding:5px 0}
+.wb-grant-row label {display:flex;gap:8px;align-items:center;overflow-wrap:anywhere}
+.wb-grant-row input[type="checkbox"] {width:1rem;height:1rem;margin:0;padding:0;flex:none;accent-color:var(--brand)}
+.wb-grant-row select {width:100%}
+#admin-users .wb-delete {margin-top:10px;padding-left:0}
+#admin-panel .wb-delete {color:#88352d}
+#admin-projects .actions {margin-top:4px}

@@ -1,4 +1,5 @@
 import argparse
+from collections.abc import Iterable
 import json
 import os
 from pathlib import Path
@@ -29,6 +30,19 @@ def fuse(lexical: list[int], dense: list[int]) -> list[int]:
 def search_current(
     project_id: str, question: str, *, index_path: Path | None = None, mode: str | None = None
 ) -> list[dict[str, str | int]]:
+    def records():
+        source = index_path if index_path is not None else CHUNKS_PATH
+        with source.open(encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip():
+                    yield json.loads(line)
+
+    return rank_current(project_id, question, records(), mode=mode)
+
+
+def rank_current(
+    project_id: str, question: str, chunks: Iterable[dict], *, mode: str | None = None,
+) -> list[dict[str, str | int]]:
     if mode is None:
         mode = os.getenv("SECUREAGENT_RETRIEVAL", "lexical")
     if mode not in {"lexical", "hybrid"}:
@@ -40,28 +54,22 @@ def search_current(
     passages = []
     lexical_hits = []
 
-    source = index_path if index_path is not None else CHUNKS_PATH
-    with source.open(encoding="utf-8") as records:
-        for line in records:
-            if not line.strip():
-                continue
-            chunk = json.loads(line)
+    for chunk in chunks:
+        if chunk["project_id"] != project_id or chunk["status"] != "effective":
+            continue
 
-            if chunk["project_id"] != project_id or chunk["status"] != "effective":
-                continue
-
-            searchable = " ".join(
-                [chunk["title"], chunk["section_title"], chunk["text"]]
-            )
-            score = len(query_pairs & character_pairs(searchable))
-            if mode == "lexical" and not score:
-                continue
-            index = len(rows)
-            rows.append(chunk)
-            if score > 0:
-                lexical_hits.append((score, index))
-            if mode == "hybrid":
-                passages.append(searchable)
+        searchable = " ".join(
+            [chunk["title"], chunk["section_title"], chunk["text"]]
+        )
+        score = len(query_pairs & character_pairs(searchable))
+        if mode == "lexical" and not score:
+            continue
+        index = len(rows)
+        rows.append(chunk)
+        if score > 0:
+            lexical_hits.append((score, index))
+        if mode == "hybrid":
+            passages.append(searchable)
 
     lexical_hits.sort(key=lambda hit: hit[0], reverse=True)
     ranking = [index for _, index in lexical_hits[:POOL_SIZE]]
