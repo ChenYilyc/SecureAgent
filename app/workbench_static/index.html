@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>项目文控台 · SecureAgent</title><link rel="stylesheet" href="/workbench/ui.css">
+<script defer src="/workbench/ui.js"></script></head>
+<body><header><div class="header-inner"><div class="brand"><span class="mark" aria-hidden="true"></span>SecureAgent <span class="brand-note">建筑项目知识库</span></div>
+<div id="identity" hidden><span id="who"></span><button type="button" id="logout" class="link">退出</button></div></div></header>
+<main>
+<section id="signin" class="login"><p class="eyebrow">文控工作台</p><h1>登录项目工作台</h1>
+<form id="login" class="stack">
+<label>账号<input id="account" name="username" autocomplete="username" required></label>
+<label>口令<input id="password" name="password" type="password" autocomplete="current-password" required></label>
+<button>登录</button></form></section>
+<div id="workspace" hidden>
+<div class="top"><div><p class="eyebrow">项目文控</p><h1>文档工作台</h1></div>
+<label>当前项目 <select id="project" aria-label="当前项目"></select></label></div>
+<div class="grid" id="panels"><div id="document-panel">
+<section id="receiving" hidden><h2>提交草稿</h2>
+<form id="upload" class="stack"><label>原件<input id="file" type="file" accept=".docx,.pdf,.md" required></label>
+<p class="hint">Word、文本 PDF 或 Markdown，每份限 8 MiB。</p>
+<div class="fields"><label>文号<input id="document" placeholder="QL-WB-101" required maxlength="71"></label>
+<label>修订版<input id="revision" placeholder="R01" required maxlength="9"></label></div>
+<button>上传并预览</button></form></section>
+<section><div class="section-heading"><h2>版本台账</h2><button id="refresh" type="button" class="link">刷新</button></div>
+<p id="listnote" class="hint"></p><div id="register"></div></section>
+</div><div id="question-panel">
+<section><h2>问项目资料</h2>
+<form id="search" class="stack"><label>问题<input id="question" aria-describedby="qa-mode" placeholder="移交清单应在几天内归档？" required maxlength="500"></label>
+<p class="hint" id="qa-mode"></p>
+<button>提问</button></form><div id="results" aria-live="polite"></div></section>
+<section><h2>条款预览</h2><div id="preview"><p class="hint">从台账或检索结果选择一个版本。</p></div></section>
+</div></div></div>
+<p id="notice" role="status" aria-live="polite"></p>
+</main></body></html>

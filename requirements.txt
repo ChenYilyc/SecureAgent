@@ -1,3 +1,7 @@
 # Runtime dependencies will be added incrementally in later phases.
 fastapi
 uvicorn[standard]
+pydantic>=2,<3
+httpx2
+python-docx>=1.2,<2
+pypdf>=6.1,<7

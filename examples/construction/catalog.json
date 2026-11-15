@@ -1,0 +1,9 @@
+{
+  "project_id": "QL01",
+  "document_id": "QL-DOC-007",
+  "title": "图纸会审纪要归档流程",
+  "revisions": [
+    {"revision": "R01", "status": "effective", "source": "QL-DOC-007_R01.md"},
+    {"revision": "R02", "status": "draft", "source": "QL-DOC-007_R02.md"}
+  ]
+}

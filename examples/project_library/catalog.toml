@@ -1,0 +1,40 @@
+# 澄川建设虚构培训资料。按项目登记已发布版本、待审批版本与历史版本。
+
+[projects.XR03]
+name = "星榕安置房二期"
+effective = [
+    "XR-DC-101_R01.md",
+    "XR-HO-203_R01.md",
+    "XR-MT-208_R01.md",
+    "XR-AR-214_R01.md",
+    "XR-MN-301_R01.md",
+    "XR-RC-306_R01.pdf",
+]
+draft = [
+    "XR-DC-101_R02.md",
+]
+
+[projects.BH04]
+name = "滨河路综合改造"
+effective = [
+    "BH-DC-101_R02.md",
+    "BH-SV-212_R01.md",
+    "BH-CH-216_R01.md",
+    "BH-BL-219_R01.md",
+    "BH-MN-302_R01.md",
+    "BH-RC-307_R01.pdf",
+]
+superseded = [
+    "BH-DC-101_R01.md",
+]
+
+[projects.SG05]
+name = "松港产业园机电工程"
+effective = [
+    "SG-DC-101_R01.md",
+    "SG-EQ-205_R01.md",
+    "SG-CM-211_R01.md",
+    "SG-OM-218_R01.md",
+    "SG-MN-303_R01.md",
+    "SG-RC-308_R01.pdf",
+]
