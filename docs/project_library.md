@@ -14,19 +14,19 @@
 
 ```bat
 .\.venv\Scripts\python.exe -m app.demo_projects
-.\.venv\Scripts\python.exe -m app.workbench_accounts add portfolio-employee --role employee --project QL01 --project HT02 --project XR03 --project BH04 --project SG05
+.\.venv\Scripts\python.exe -m app.workbench_accounts add portfolio-employee --role employee --project XR03 --project BH04 --project SG05
 ```
 
-这条账号命令显式授予五个演示项目的员工访问权限。只有三个新项目的全新台账可以只传 XR03、BH04、SG05。原先仅属于某个项目的员工账号仍适合演示项目隔离。
+这条命令授予本次导入的三个项目的员工权限。如果台账中还登记了 QL01、HT02，可在首次建号时按实际需要追加这两个项目。仅属于单个项目的员工账号适合演示项目隔离。
 
 首次导入登记 20 个版本，包含 18 份现行文档、XR03 的一份待审批修订和 BH04 的一份历史版。初始化直接登记这份虚构的期初台账，操作记录中的导入人为 `demo-library-import`。日常上传和后续换版继续由资料员、审批人操作。原件与初始状态清单位于 `examples/project_library/`。重复导入会按版本标识和原件摘要核对，现场已经批准的新修订会保留其当前状态。
 
-要让这三个新项目自动进行问答，在已有密钥和本地嵌入模型的服务端 CMD 中启动服务。例子也为原有 QL01 启用问答。
+要让这三个新项目自动进行问答，在已有密钥和本地嵌入模型的服务端 CMD 中启动服务。该例为本次导入的三个项目启用问答。
 
 ```bat
 set "SECUREAGENT_RETRIEVAL=hybrid"
 set "SECUREAGENT_ALLOW_REMOTE_QA=1"
-set "SECUREAGENT_QA_PROJECTS=QL01,XR03,BH04,SG05"
+set "SECUREAGENT_QA_PROJECTS=XR03,BH04,SG05"
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
